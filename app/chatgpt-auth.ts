@@ -42,6 +42,7 @@ export async function requireChatGPTUser(
   if (user) return user;
 
   redirect(chatGPTSignInPath(returnTo));
+  throw new Error("Redirecting");
 }
 
 export function chatGPTSignInPath(returnTo: string): string {

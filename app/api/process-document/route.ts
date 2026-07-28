@@ -247,7 +247,7 @@ export async function POST(request: Request) {
     total: extracted.total,
     rfc_detectado: extracted.rfc,
     fecha_documento: extracted.date,
-  }).eq("id", document.id);
+  }).eq("id", document.id).eq("revisado_por_contador", false);
   if (updateError) return errorResponse(500, "PERSISTENCE_ERROR", "No fue posible guardar el resultado.");
 
   if (processed.alerts.length) {
