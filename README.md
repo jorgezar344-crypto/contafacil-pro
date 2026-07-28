@@ -1,19 +1,36 @@
 # ContaFácil Pro — Demo
 
-Aplicación móvil responsive para demostrar el envío y la revisión preliminar de documentos fiscales.
+Demo móvil responsive para enviar documentos fiscales y consultar un resumen fiscal preliminar. No calcula impuestos definitivos ni envía información al SAT.
 
-## Ejecutar localmente
+## Instalar y ejecutar localmente
 
-1. Instala dependencias con `npm install`.
-2. Inicia con `npm run dev`.
-3. Abre la URL que muestre la terminal.
+1. Usa Node.js 22.13 o superior.
+2. Instala dependencias: `npm install`.
+3. Copia `.env.example` a `.env.local`.
+4. Ejecuta: `npm run dev`.
+5. Abre la dirección local que muestre la consola.
 
-## Integración n8n
+## Variables de entorno
 
-Copia `.env.example` a `.env.local` y configura `N8N_WEBHOOK_URL`. Opcionalmente añade `N8N_WEBHOOK_TOKEN`; se enviará como token Bearer. La ruta `POST /api/process-document` mantiene el webhook fuera del navegador.
+| Variable | Obligatoria | Uso |
+| --- | --- | --- |
+| `N8N_WEBHOOK_URL` | No | URL privada del webhook de automatización. Sin esta variable se usa el modo demo. |
+| `N8N_WEBHOOK_TOKEN` | No | Token secreto enviado como encabezado `Authorization: Bearer <token>`. |
 
-Sin URL configurada, la aplicación espera dos segundos y responde con datos ficticios de demostración.
+Nunca agregues estas variables al código del navegador ni confirmes `.env.local` en Git.
 
-## Publicar en Vercel
+## Conectar un webhook
 
-Importa el repositorio en Vercel y configura las mismas variables de entorno en Project Settings. No se almacenan documentos ni información fiscal sensible en esta demo.
+La app envía los datos al endpoint interno `POST /api/process-document`. Esa ruta, ejecutada en el servidor, reenvía el JSON a `N8N_WEBHOOK_URL`; por ello la URL del webhook y el token no llegan al frontend.
+
+La automatización puede ser n8n o Node-RED, siempre que acepte un `POST` JSON y devuelva el formato documentado en [DELIVERY_REPORT.md](./DELIVERY_REPORT.md). Sin URL configurada, la ruta devuelve una respuesta simulada tras dos segundos.
+
+## Publicar desde GitHub en Vercel
+
+1. Sube este proyecto a un repositorio de GitHub.
+2. En Vercel, selecciona **Add New → Project** e importa el repositorio.
+3. Conserva la configuración de compilación detectada por Vercel; el comando de compilación es `npm run build`.
+4. En **Settings → Environment Variables**, agrega `N8N_WEBHOOK_URL` y, si aplica, `N8N_WEBHOOK_TOKEN` para Production, Preview y Development.
+5. Haz clic en **Deploy**.
+
+Para cada cambio posterior, un push a la rama conectada creará un despliegue nuevo. No se almacenan archivos ni información fiscal sensible en esta demo.
