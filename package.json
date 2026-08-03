@@ -14,7 +14,8 @@
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
-    "@supabase/supabase-js": "2.57.4",
+    "@supabase/ssr": "^0.8.0",
+    "@supabase/supabase-js": "^2.76.1",
     "@tanstack/react-table": "^8.21.3",
     "drizzle-orm": "0.45.2",
     "lucide-react": "^0.468.0",
@@ -37,6 +38,7 @@
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.6",
     "react-server-dom-webpack": "19.2.6",
+    "supabase": "^2.81.1",
     "tailwindcss": "4.2.1",
     "typescript": "5.9.3",
     "vinext": "0.0.50",
