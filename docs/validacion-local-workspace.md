@@ -6,7 +6,7 @@ Fecha: 2026-08-03. Alcance: Supabase local y servidor temporal `localhost:3100` 
 
 `scripts/local-http-auth-check.mjs` crea datos persistentes solamente durante la ejecución: cinco usuarios de Auth, dos despachos, tres empresas, tres períodos y veintiséis documentos. Inicia sesión mediante Supabase Auth, conserva las cookies SSR resultantes y los elimina en un bloque `finally`.
 
-Resultados verificados:
+Resultados verificados (15 aserciones):
 
 - `/api/workspace` sin sesión devuelve `401` y `UNAUTHORIZED`.
 - `firm_admin`, `accountant`, `assistant`, `client_user` y un administrador de otro despacho reciben su contexto autorizado.
@@ -15,6 +15,8 @@ Resultados verificados:
 - La respuesta no expone `firm_id`, `company_id`, `period_id`, `storage_path`, `sha256`, `uploaded_by` ni `url_archivo`.
 - El contexto seleccionado en URL (`company_id`, `period_id`) se valida y se devuelve por `/api/workspace`.
 - La comprobación posterior confirmó cero fixtures restantes.
+- La carga multipart autorizada persiste un PDF en Storage privado y devuelve `202` sin extracción simulada cuando no existe webhook local.
+- La carga de una empresa ajena devuelve `403`; el detalle autorizado devuelve metadatos y oculta la ruta privada.
 
 El selector elimina `period_id` cuando cambia la empresa; el servidor el resuelve o rechaza siempre según la membresía. Los enlaces de navegación del shell conservan la consulta actual.
 

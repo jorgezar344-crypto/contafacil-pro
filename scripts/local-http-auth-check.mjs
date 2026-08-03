@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createServerClient } from "@supabase/ssr";
+import { createClient } from "@supabase/supabase-js";
 
 const url = process.env.SUPABASE_URL;
 const anon = process.env.SUPABASE_ANON_KEY;
@@ -13,6 +14,8 @@ const createdUserIds = [];
 const suffix = `${Date.now()}-${Math.floor(Math.random() * 100000)}`;
 const password = "Local-BRO24-Test-Only-2026!";
 const headers = { apikey: service, Authorization: `Bearer ${service}`, "Content-Type": "application/json" };
+const storage = createClient(url, service, { auth: { autoRefreshToken: false, persistSession: false } });
+const uploadedPaths = [];
 
 async function request(path, options = {}) {
   const response = await fetch(`${url}${path}`, { ...options, headers: { ...headers, ...(options.headers || {}) } });
@@ -42,6 +45,7 @@ async function appGet(path, cookie = "") {
 }
 function check(condition, message) { if (!condition) throw new Error(`Assertion failed: ${message}`); }
 async function cleanup() {
+  if (uploadedPaths.length) await storage.storage.from("documentos-fiscales-demo").remove(uploadedPaths);
   for (const table of ["documentos", "expedientes", "clientes", "accounting_periods", "company_members", "client_companies", "firm_members", "accounting_firms"]) {
     try { await request(`/rest/v1/${table}?id=in.(${Object.values(ids).join(",")})`, { method: "DELETE" }); } catch {}
     try { await request(`/rest/v1/${table}?firm_id=in.(${ids.firmA},${ids.firmB})`, { method: "DELETE" }); } catch {}
@@ -73,5 +77,11 @@ try {
   const periodDenied = await appGet(`/api/app-data?company_id=${ids.companyA}&period_id=${ids.periodB}`, cookies.client_user); check(periodDenied.status === 403, "client user cannot select a period outside its company");
   const crossFirm = await appGet(`/api/app-data?company_id=${ids.companyA}&period_id=${ids.periodA}`, cookies.other_firm); check(crossFirm.status === 403, "other firm cannot access first firm data");
   const preserved = await appGet(`/api/workspace?company_id=${ids.companyA}&period_id=${ids.periodA}`, cookies.accountant); check(preserved.status === 200 && preserved.body.workspace.company.id === ids.companyA && preserved.body.workspace.period.id === ids.periodA, "workspace accepts and returns the selected URL context");
-  console.log(JSON.stringify({ status: "passed", assertions: 12, fixture_users: 5, fixture_documents: 26 }));
+  const upload = new FormData(); upload.set("company_id", ids.companyA); upload.set("period_id", ids.periodA); upload.set("documentType", "Factura recibida"); upload.set("category", "Gastos"); upload.set("notes", "Fixture temporal de carga HTTP"); upload.set("file", new Blob(["%PDF-1.4 local fixture"], { type: "application/pdf" }), "fixture.pdf");
+  const uploadResponse = await fetch(`${app}/api/process-document`, { method: "POST", headers: { Cookie: cookies.firm_admin }, body: upload }); const uploadBody = await uploadResponse.json(); check(uploadResponse.status === 202 && uploadBody.persisted === true, "authorized upload persists a document without simulated extraction");
+  const uploadDenied = new FormData(); uploadDenied.set("company_id", ids.companyB); uploadDenied.set("period_id", ids.periodB); uploadDenied.set("documentType", "Factura recibida"); uploadDenied.set("category", "Gastos"); uploadDenied.set("file", new Blob(["%PDF-1.4 local fixture"], { type: "application/pdf" }), "forbidden.pdf");
+  const uploadDeniedResponse = await fetch(`${app}/api/process-document`, { method: "POST", headers: { Cookie: cookies.client_user }, body: uploadDenied }); check(uploadDeniedResponse.status === 403, "upload blocks an unauthorized company");
+  const detail = await appGet(`/api/documents/${uploadBody.documentId}?company_id=${ids.companyA}&period_id=${ids.periodA}`, cookies.firm_admin); check(detail.status === 200 && detail.body.document.id === uploadBody.documentId && !Object.hasOwn(detail.body.document, "storage_path"), "authorized detail hides private storage path");
+  const uploadedRow = await request(`/rest/v1/documentos?id=eq.${uploadBody.documentId}&select=storage_path`); if (uploadedRow[0]?.storage_path) uploadedPaths.push(uploadedRow[0].storage_path);
+  console.log(JSON.stringify({ status: "passed", assertions: 15, fixture_users: 5, fixture_documents: 27 }));
 } finally { await cleanup(); }
