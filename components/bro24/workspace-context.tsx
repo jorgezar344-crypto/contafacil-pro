@@ -1,1 +1,90 @@
-"use client";import{createContext,useContext,useEffect,useState}from"react";import{usePathname,useRouter,useSearchParams}from"next/navigation";type W=any;const C=createContext<any>(null);export function WorkspaceProvider({children}:{children:React.ReactNode}){const q=useSearchParams(),router=useRouter(),path=usePathname(),[w,setW]=useState<W>(),[error,setError]=useState("");const load=async()=>{const p=new URLSearchParams(q);const r=await fetch(`/api/workspace?${p}`,{cache:"no-store"}),d=await r.json();if(!r.ok){setW(undefined);setError(d.code||"ERROR")}else{setW(d.workspace);setError("")}};useEffect(()=>{void load()},[q]);const change=(company_id?:string,period_id?:string|null)=>{const p=new URLSearchParams(q);if(company_id)p.set("company_id",company_id);if(period_id===null)p.delete("period_id");else if(period_id)p.set("period_id",period_id);router.replace(`${path}?${p}`)};return <C.Provider value={{workspace:w,error,loading:!w&&!error,change}}>{children}</C.Provider>}export const useWorkspace=()=>useContext(C);
+"use client";
+
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+
+type Company = { id: string; legal_name: string; rfc?: string | null };
+type Period = { id: string; year: number; month: number; status: string };
+type Workspace = {
+  user: { id: string };
+  firm: { id: string; name: string };
+  role: string;
+  companies: Company[];
+  company: Company;
+  periods: Period[];
+  period: Period | null;
+};
+type WorkspaceValue = {
+  workspace?: Workspace;
+  error: string;
+  loading: boolean;
+  change: (companyId?: string, periodId?: string | null) => void;
+  href: (pathname: string, overrides?: Record<string, string | null | undefined>) => string;
+};
+
+const WorkspaceContext = createContext<WorkspaceValue | null>(null);
+
+export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
+  const query = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const [workspace, setWorkspace] = useState<Workspace>();
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    async function load() {
+      try {
+        const response = await fetch(`/api/workspace?${query.toString()}`, { cache: "no-store" });
+        const data = await response.json();
+        if (!active) return;
+        if (!response.ok) {
+          setWorkspace(undefined);
+          setError(data.code || "ERROR");
+          return;
+        }
+        setWorkspace(data.workspace);
+        setError("");
+      } catch {
+        if (active) {
+          setWorkspace(undefined);
+          setError("NETWORK_ERROR");
+        }
+      }
+    }
+    void load();
+    return () => { active = false; };
+  }, [query]);
+
+  const value = useMemo<WorkspaceValue>(() => {
+    const href = (target: string, overrides: Record<string, string | null | undefined> = {}) => {
+      const params = new URLSearchParams(query.toString());
+      Object.entries(overrides).forEach(([key, value]) => {
+        if (value === null || value === undefined || value === "") params.delete(key);
+        else params.set(key, value);
+      });
+      const serialized = params.toString();
+      return `${target}${serialized ? `?${serialized}` : ""}`;
+    };
+    return {
+      workspace,
+      error,
+      loading: !workspace && !error,
+      href,
+      change: (companyId?: string, periodId?: string | null) => {
+        const next: Record<string, string | null | undefined> = {};
+        if (companyId !== undefined) next.company_id = companyId;
+        if (periodId !== undefined) next.period_id = periodId;
+        router.replace(href(pathname, next));
+      },
+    };
+  }, [error, pathname, query, router, workspace]);
+
+  return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;
+}
+
+export function useWorkspace() {
+  const value = useContext(WorkspaceContext);
+  if (!value) throw new Error("WorkspaceProvider is required");
+  return value;
+}

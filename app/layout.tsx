@@ -9,5 +9,5 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="es"><body><Suspense fallback={children}><WorkspaceProvider>{children}</WorkspaceProvider></Suspense></body></html>;
+  return <html lang="es"><body><Suspense fallback={null}><WorkspaceProvider>{children}</WorkspaceProvider></Suspense></body></html>;
 }
