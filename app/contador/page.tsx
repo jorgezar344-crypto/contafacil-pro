@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
+import { BrandLogo } from "@/components/bro24/brand-logo";
 
 type Cliente = {
   id: string;
@@ -269,7 +270,6 @@ export default function ContadorDashboard() {
           expedienteId: selectedExpediente.id,
           observaciones: reportObs,
           estatusExpediente: "Aprobado por contador",
-          contadorAsignado: "Laura Martínez",
         }),
       });
       if (res.status === 401) {
@@ -294,11 +294,14 @@ export default function ContadorDashboard() {
       <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
         <div className="w-full max-w-md bg-white rounded-3xl p-8 border border-slate-200 shadow-xl space-y-6">
           <div className="text-center space-y-2">
+            <div className="mx-auto w-fit rounded-xl bg-[#15181d] px-3 py-2">
+              <BrandLogo compact />
+            </div>
             <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-[#102a43] text-white text-2xl font-bold shadow-md">
               📊
             </div>
-            <h1 className="text-2xl font-extrabold text-[#102a43] tracking-tight">Acceso al Panel del Contador</h1>
-            <p className="text-xs text-slate-500">ContaFácil Pro · Ingrese la clave de acceso autorizada</p>
+            <h1 className="text-2xl font-extrabold text-[#15181d] tracking-tight">Acceso al portal del contador</h1>
+            <p className="text-xs text-slate-500">BRO24 Contable · Ingrese la clave de acceso autorizada</p>
           </div>
 
           <form onSubmit={handleLogin} className="space-y-4">
@@ -325,14 +328,14 @@ export default function ContadorDashboard() {
             <button
               type="submit"
               disabled={loginLoading}
-              className="w-full rounded-xl bg-[#102a43] hover:bg-slate-800 py-3 text-sm font-bold text-white shadow-md transition disabled:opacity-50"
+              className="w-full rounded-xl bg-[#15181d] hover:bg-slate-800 py-3 text-sm font-bold text-white shadow-md transition disabled:opacity-50"
             >
               {loginLoading ? "Verificando..." : "Ingresar al Dashboard"}
             </button>
           </form>
 
           <div className="text-center pt-2 border-t border-slate-100">
-            <Link href="/" className="text-xs font-medium text-emerald-700 hover:underline">
+            <Link href="/inicio" className="text-xs font-medium text-[#c95000] hover:underline">
               ← Regresar a la Aplicación Cliente
             </Link>
           </div>
@@ -344,16 +347,19 @@ export default function ContadorDashboard() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans">
       {/* Header Superior */}
-      <header className="bg-[#102a43] text-white border-b border-slate-700 sticky top-0 z-20">
+      <header className="bg-[#15181d] text-white border-b border-slate-700 sticky top-0 z-20">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
+            <div className="rounded-xl bg-white/5 px-3 py-2">
+              <BrandLogo compact />
+            </div>
             <span className="grid h-10 w-10 place-items-center rounded-xl bg-emerald-500 text-white font-bold text-xl shadow-md">
               📊
             </span>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-xl font-bold tracking-tight">ContaFácil <span className="text-emerald-400">Pro</span></h1>
-                <span className="rounded-md bg-emerald-500/20 px-2 py-0.5 text-xs font-semibold text-emerald-300 border border-emerald-400/30">
+                <h1 className="text-xl font-bold tracking-tight">BRO24 <span className="text-[#ff8a3d]">Contable</span></h1>
+                <span className="rounded-md bg-[#ff6a00]/15 px-2 py-0.5 text-xs font-semibold text-[#ffb27a] border border-[#ff8a3d]/30">
                   Panel del Contador
                 </span>
               </div>
@@ -362,8 +368,8 @@ export default function ContadorDashboard() {
           </div>
           <div className="flex items-center gap-3">
             <div className="text-right hidden sm:block">
-              <p className="text-sm font-semibold text-white">CP. Laura Martínez</p>
-              <p className="text-xs text-emerald-400">Contador Principal</p>
+              <p className="text-sm font-semibold text-white">Sesión de contador</p>
+              <p className="text-xs text-[#ffb27a]">Acceso autorizado</p>
             </div>
             <button
               onClick={() => void handleLogout()}
@@ -371,7 +377,7 @@ export default function ContadorDashboard() {
             >
               Cerrar sesión
             </button>
-            <Link href="/" className="rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs font-medium text-slate-200 border border-slate-600 transition">
+            <Link href="/inicio" className="rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-1.5 text-xs font-medium text-slate-200 border border-slate-600 transition">
               ← App Cliente
             </Link>
           </div>
@@ -480,7 +486,7 @@ export default function ContadorDashboard() {
                         <StatusBadge status={exp.estatus} />
                       </td>
                       <td className="px-6 py-4 text-xs text-slate-600">
-                        {exp.contador_asignado || "Laura Martínez"}
+                        {exp.contador_asignado || "Sin asignar"}
                       </td>
                       <td className="px-6 py-4 text-right">
                         <button
