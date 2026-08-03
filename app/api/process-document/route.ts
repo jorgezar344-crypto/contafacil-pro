@@ -1,290 +1,70 @@
 import { NextResponse } from "next/server";
+import { getAuthorizedContext } from "@/lib/bro24-context";
 import { getSupabaseAdmin, STORAGE_BUCKET } from "@/lib/supabase-admin";
 
 export const runtime = "nodejs";
 
 const WEBHOOK_TIMEOUT_MS = 15_000;
-const RFC_PATTERN = /^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$/i;
-const ALLOWED_MIME_TYPES = new Set([
-  "application/pdf",
-  "application/xml",
-  "text/xml",
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-]);
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
+const ALLOWED_MIME_TYPES = new Set(["application/pdf", "application/xml", "text/xml", "image/jpeg", "image/png", "image/webp"]);
+const ALLOWED_EXTENSIONS = new Set(["pdf", "xml", "jpg", "jpeg", "png", "webp"]);
 
-type DocumentRequest = {
-  clientName?: unknown;
-  legalName?: unknown;
-  rfc?: unknown;
-  documentType?: unknown;
-  fiscalPeriod?: unknown;
-  notes?: unknown;
-  file?: unknown;
-};
-
-type ProcessedDocument = {
-  success: true;
-  documentId: string;
-  status: string;
-  extractedData: {
-    rfc: string;
-    issuer: string;
-    date: string;
-    subtotal: number;
-    tax: number;
-    total: number;
-  };
-  alerts: string[];
-};
-
-function errorResponse(status: number, code: string, error: string) {
-  return NextResponse.json({ success: false, code, error }, { status });
-}
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
-function validateRequest(payload: DocumentRequest, uploadedFile: File | null) {
-  const missing = [
-    ["clientName", payload.clientName],
-    ["rfc", payload.rfc],
-    ["documentType", payload.documentType],
-    ["fiscalPeriod", payload.fiscalPeriod],
-  ].filter(([, value]) => !isNonEmptyString(value)).map(([field]) => field);
-
-  if (missing.length) return `Faltan campos obligatorios: ${missing.join(", ")}.`;
-  if (!RFC_PATTERN.test(String(payload.rfc).trim())) return "El RFC no tiene un formato válido.";
-  if (payload.notes !== undefined && typeof payload.notes !== "string") return "El campo notes debe ser texto.";
-  if (uploadedFile && uploadedFile.size > MAX_FILE_SIZE) return "El archivo excede el límite de 20 MB.";
-  if (uploadedFile && !ALLOWED_MIME_TYPES.has(uploadedFile.type)) return "El tipo de archivo no está permitido.";
-  return null;
-}
-
-function isProcessedDocument(value: unknown): value is ProcessedDocument {
-  if (!value || typeof value !== "object") return false;
-  const response = value as Record<string, unknown>;
-  const extracted = response.extractedData as Record<string, unknown> | undefined;
-  return response.success === true
-    && typeof response.documentId === "string"
-    && typeof response.status === "string"
-    && Array.isArray(response.alerts)
-    && response.alerts.every((alert) => typeof alert === "string")
-    && !!extracted
-    && typeof extracted.rfc === "string"
-    && typeof extracted.issuer === "string"
-    && typeof extracted.date === "string"
-    && [extracted.subtotal, extracted.tax, extracted.total].every((amount) => typeof amount === "number");
-}
-
-function safeFileName(name: string) {
-  return name.normalize("NFKD").replace(/[^\w.-]+/g, "-").replace(/-+/g, "-");
-}
-
-async function readRequest(request: Request): Promise<{ payload: DocumentRequest; file: File | null }> {
-  const contentType = request.headers.get("content-type") || "";
-  if (contentType.includes("multipart/form-data")) {
-    const form = await request.formData();
-    const candidate = form.get("file");
-    return {
-      payload: {
-        clientName: form.get("clientName"),
-        legalName: form.get("legalName"),
-        rfc: form.get("rfc"),
-        documentType: form.get("documentType"),
-        fiscalPeriod: form.get("fiscalPeriod"),
-        notes: form.get("notes") || undefined,
-      },
-      file: candidate instanceof File && candidate.size > 0 ? candidate : null,
-    };
-  }
-  return { payload: await request.json(), file: null };
-}
+type ProcessedDocument = { success: true; documentId: string; status: string; extractedData: { rfc: string; issuer: string; date: string; subtotal: number; tax: number; total: number }; alerts: string[] };
+function response(status: number, code: string, error: string) { return NextResponse.json({ success: false, code, error }, { status, headers: { "Cache-Control": "no-store" } }); }
+function safeName(name: string) { return name.normalize("NFKD").replace(/[^\w.-]+/g, "-").replace(/-+/g, "-").replace(/^[-.]+|[-.]+$/g, "").slice(0, 160); }
+function validProcessed(value: unknown): value is ProcessedDocument { const item = value as ProcessedDocument | null; return !!item && item.success === true && typeof item.documentId === "string" && typeof item.status === "string" && Array.isArray(item.alerts) && !!item.extractedData && typeof item.extractedData.rfc === "string" && typeof item.extractedData.issuer === "string" && typeof item.extractedData.date === "string" && [item.extractedData.subtotal, item.extractedData.tax, item.extractedData.total].every((number) => typeof number === "number"); }
 
 export async function POST(request: Request) {
-  let parsed: { payload: DocumentRequest; file: File | null };
-  try {
-    parsed = await readRequest(request);
-  } catch {
-    return errorResponse(400, "INVALID_REQUEST", "El cuerpo de la solicitud no es válido.");
+  let form: FormData;
+  try { form = await request.formData(); } catch { return response(400, "INVALID_REQUEST", "El cuerpo debe ser multipart/form-data."); }
+  const companyId = String(form.get("company_id") || "");
+  const periodId = String(form.get("period_id") || "");
+  const documentType = String(form.get("documentType") || "").trim();
+  const category = String(form.get("category") || "").trim();
+  const notes = String(form.get("notes") || "").trim().slice(0, 2000);
+  const file = form.get("file");
+  if (!companyId || !periodId) return response(422, "INVALID_REQUEST", "Selecciona una empresa y un período antes de enviar.");
+  const context = await getAuthorizedContext(companyId, periodId);
+  if ("error" in context) {
+    if (context.error === "UNAUTHORIZED") return response(401, "UNAUTHORIZED", "Tu sesión expiró. Inicia sesión nuevamente.");
+    return response(403, context.error === "FORBIDDEN" ? "FORBIDDEN_COMPANY" : "FORBIDDEN_PERIOD", "No tienes acceso al contexto seleccionado.");
   }
+  if (!context.period) return response(403, "FORBIDDEN_PERIOD", "El período seleccionado no está disponible.");
+  if (!documentType || !category) return response(422, "INVALID_REQUEST", "Selecciona tipo y categoría documental.");
+  if (!(file instanceof File) || file.size === 0) return response(422, "EMPTY_FILE", "Selecciona un archivo no vacío.");
+  const filename = safeName(file.name);
+  const extension = filename.split(".").pop()?.toLowerCase() || "";
+  if (!filename || !ALLOWED_EXTENSIONS.has(extension) || !ALLOWED_MIME_TYPES.has(file.type)) return response(415, "INVALID_FILE_TYPE", "El tipo de archivo no está permitido.");
+  if (file.size > MAX_FILE_SIZE) return response(413, "FILE_TOO_LARGE", "Cada archivo puede pesar hasta 20 MB.");
 
-  const { payload, file } = parsed;
-  const validationError = validateRequest(payload, file);
-  if (validationError) return errorResponse(422, "VALIDATION_ERROR", validationError);
+  let admin;
+  try { admin = getSupabaseAdmin(); } catch { return response(500, "STORAGE_ERROR", "El almacenamiento privado no está configurado."); }
+  const periodLabel = `${context.period.year}-${String(context.period.month).padStart(2, "0")}`;
+  const { data: legacyClient, error: clientError } = await admin.from("clientes").upsert({ nombre: context.company.legal_name, razon_social: context.company.legal_name, rfc: context.company.rfc || "XAXX010101000" }, { onConflict: "rfc" }).select("id").single();
+  if (clientError || !legacyClient) return response(500, "DATABASE_ERROR", "No fue posible preparar el expediente autorizado.");
+  const { data: expediente, error: expedienteError } = await admin.from("expedientes").upsert({ cliente_id: legacyClient.id, periodo_fiscal: periodLabel, estatus: "recibido", firm_id: context.firm.id, company_id: context.company.id, period_id: context.period.id, assigned_user_id: context.user.id, updated_at: new Date().toISOString() }, { onConflict: "cliente_id,periodo_fiscal" }).select("id").single();
+  if (expedienteError || !expediente) return response(500, "DATABASE_ERROR", "No fue posible crear el expediente.");
 
-  let supabase;
-  try {
-    supabase = getSupabaseAdmin();
-  } catch {
-    return errorResponse(500, "SUPABASE_CONFIG_ERROR", "El almacenamiento persistente no está configurado.");
-  }
-
-  const clientName = String(payload.clientName).trim();
-  const legalName = isNonEmptyString(payload.legalName) ? payload.legalName.trim() : clientName;
-  const rfc = String(payload.rfc).trim().toUpperCase();
-  const documentType = String(payload.documentType).trim();
-  const fiscalPeriod = String(payload.fiscalPeriod).trim();
-
-  const { data: client, error: clientError } = await supabase
-    .from("clientes")
-    .upsert({ nombre: clientName, razon_social: legalName, rfc }, { onConflict: "rfc" })
-    .select("id")
-    .single();
-  if (clientError || !client) return errorResponse(500, "PERSISTENCE_ERROR", "No fue posible guardar el cliente.");
-
-  const { data: expediente, error: expedienteError } = await supabase
-    .from("expedientes")
-    .upsert(
-      { cliente_id: client.id, periodo_fiscal: fiscalPeriod, estatus: "procesando", updated_at: new Date().toISOString() },
-      { onConflict: "cliente_id,periodo_fiscal" },
-    )
-    .select("id")
-    .single();
-  if (expedienteError || !expediente) return errorResponse(500, "PERSISTENCE_ERROR", "No fue posible guardar el expediente.");
-
-  let storagePath: string | null = null;
-  let signedFileUrl: string | null = null;
-  if (file) {
-    storagePath = `${client.id}/${expediente.id}/${crypto.randomUUID()}-${safeFileName(file.name)}`;
-    const { error: uploadError } = await supabase.storage.from(STORAGE_BUCKET).upload(storagePath, file, {
-      contentType: file.type,
-      upsert: false,
-    });
-    if (uploadError) return errorResponse(500, "STORAGE_ERROR", "No fue posible guardar el archivo.");
-    const { data: signed } = await supabase.storage.from(STORAGE_BUCKET).createSignedUrl(storagePath, 900);
-    signedFileUrl = signed?.signedUrl || null;
-  }
-
-  const { data: document, error: documentError } = await supabase
-    .from("documentos")
-    .insert({
-      expediente_id: expediente.id,
-      tipo_documento: documentType,
-      nombre_archivo: file?.name || null,
-      url_archivo: storagePath,
-      estatus: "procesando",
-    })
-    .select("id")
-    .single();
-  if (documentError || !document) return errorResponse(500, "PERSISTENCE_ERROR", "No fue posible guardar el documento.");
-
-  const n8nPayload = {
-    clientName,
-    rfc,
-    documentType,
-    fiscalPeriod,
-    notes: typeof payload.notes === "string" ? payload.notes : "",
-    file: file ? { name: file.name, type: file.type, size: file.size } : null,
-    documentId: document.id,
-    expedienteId: expediente.id,
-    storagePath,
-    signedFileUrl,
-  };
+  const storagePath = `${context.firm.id}/${context.company.id}/${context.period.id}/${crypto.randomUUID()}-${filename}`;
+  const { error: storageError } = await admin.storage.from(STORAGE_BUCKET).upload(storagePath, file, { contentType: file.type, upsert: false });
+  if (storageError) return response(500, "STORAGE_ERROR", "No fue posible guardar el archivo privado.");
+  const { data: document, error: documentError } = await admin.from("documentos").insert({ expediente_id: expediente.id, tipo_documento: documentType, categoria: category, nombre_archivo: filename, url_archivo: storagePath, storage_path: storagePath, mime_type: file.type, file_size: file.size, notas: notes || null, estatus: "procesando", firm_id: context.firm.id, company_id: context.company.id, period_id: context.period.id, uploaded_by: context.user.id }).select("id").single();
+  if (documentError || !document) { await admin.storage.from(STORAGE_BUCKET).remove([storagePath]); return response(500, "DATABASE_ERROR", "No fue posible registrar el documento."); }
 
   const webhookUrl = process.env.N8N_WEBHOOK_URL;
-  let processed: ProcessedDocument;
-  let integrationMode: "mock" | "n8n" = "mock";
-
-  if (!webhookUrl) {
-    processed = {
-      success: true,
-      documentId: document.id,
-      status: "processed",
-      extractedData: {
-        rfc,
-        issuer: legalName,
-        date: new Date().toISOString().slice(0, 10),
-        subtotal: 10000,
-        tax: 1600,
-        total: 11600,
-      },
-      alerts: ["Resultado simulado: webhook n8n no configurado"],
-    };
-  } else {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), WEBHOOK_TIMEOUT_MS);
-    try {
-      const response = await fetch(webhookUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(process.env.N8N_WEBHOOK_TOKEN
-            ? { Authorization: `Bearer ${process.env.N8N_WEBHOOK_TOKEN}` }
-            : {}),
-        },
-        body: JSON.stringify(n8nPayload),
-        signal: controller.signal,
-      });
-      if (!response.ok) throw new Error("WEBHOOK_HTTP_ERROR");
-      if (!(response.headers.get("content-type") || "").includes("application/json")) {
-        throw new Error("WEBHOOK_INVALID_CONTENT_TYPE");
-      }
-      const data: unknown = await response.json();
-      if (!isProcessedDocument(data)) throw new Error("WEBHOOK_INVALID_RESPONSE");
-      processed = data;
-      integrationMode = "n8n";
-    } catch (error) {
-      await supabase.from("documentos").update({ estatus: "requiere atención" }).eq("id", document.id);
-      if (error instanceof Error && error.name === "AbortError") {
-        return errorResponse(504, "WEBHOOK_TIMEOUT", "La automatización tardó demasiado en responder.");
-      }
-      return errorResponse(502, "WEBHOOK_ERROR", "La automatización no pudo procesar el documento.");
-    } finally {
-      clearTimeout(timeout);
-    }
-  }
-
-  const extracted = processed.extractedData;
-  const { error: updateError } = await supabase.from("documentos").update({
-    estatus: processed.status,
-    confidence: 95,
-    subtotal: extracted.subtotal,
-    iva: extracted.tax,
-    total: extracted.total,
-    rfc_detectado: extracted.rfc,
-    fecha_documento: extracted.date,
-  }).eq("id", document.id).eq("revisado_por_contador", false);
-  if (updateError) return errorResponse(500, "PERSISTENCE_ERROR", "No fue posible guardar el resultado.");
-
-  if (processed.alerts.length) {
-    const { error: findingsError } = await supabase.from("hallazgos").insert(
-      processed.alerts.map((description) => ({
-        documento_id: document.id,
-        tipo: "automatización",
-        descripcion: description,
-        prioridad: "media",
-      })),
-    );
-    if (findingsError) return errorResponse(500, "PERSISTENCE_ERROR", "No fue posible guardar los hallazgos.");
-  }
-
-  const isIncome = documentType.toLowerCase().includes("emitida");
-  const report = {
-    expediente_id: expediente.id,
-    ingresos: isIncome ? extracted.subtotal : 0,
-    gastos: isIncome ? 0 : extracted.subtotal,
-    iva_trasladado: isIncome ? extracted.tax : 0,
-    iva_acreditable: isIncome ? 0 : extracted.tax,
-    diferencia_iva: isIncome ? extracted.tax : -extracted.tax,
-    observaciones: processed.alerts.join("; ") || null,
-  };
-  const { error: reportError } = await supabase.from("reportes").upsert(report, { onConflict: "expediente_id" });
-  if (reportError) return errorResponse(500, "PERSISTENCE_ERROR", "No fue posible guardar el reporte.");
-
-  await supabase.from("expedientes").update({
-    estatus: processed.alerts.length ? "requiere atención" : "procesado",
-    updated_at: new Date().toISOString(),
-  }).eq("id", expediente.id);
-
-  return NextResponse.json({
-    ...processed,
-    documentId: document.id,
-    expedienteId: expediente.id,
-    integrationMode,
-    persisted: true,
-  });
+  if (!webhookUrl) return NextResponse.json({ success: true, documentId: document.id, expedienteId: expediente.id, status: "procesando", integrationMode: "pending", persisted: true }, { status: 202, headers: { "Cache-Control": "no-store" } });
+  const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), WEBHOOK_TIMEOUT_MS);
+  try {
+    const webhook = await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json", ...(process.env.N8N_WEBHOOK_TOKEN ? { Authorization: `Bearer ${process.env.N8N_WEBHOOK_TOKEN}` } : {}) }, body: JSON.stringify({ documentId: document.id, expedienteId: expediente.id, firmId: context.firm.id, companyId: context.company.id, periodId: context.period.id, documentType, category, notes, file: { name: filename, type: file.type, size: file.size }, storagePath }), signal: controller.signal });
+    if (!webhook.ok || !(webhook.headers.get("content-type") || "").includes("application/json")) throw new Error("PROCESSING_ERROR");
+    const processed: unknown = await webhook.json(); if (!validProcessed(processed)) throw new Error("PROCESSING_ERROR");
+    const extracted = processed.extractedData;
+    const { error: updateError } = await admin.from("documentos").update({ estatus: processed.status, subtotal: extracted.subtotal, iva: extracted.tax, total: extracted.total, rfc_detectado: extracted.rfc, fecha_documento: extracted.date, updated_at: new Date().toISOString() }).eq("id", document.id).eq("firm_id", context.firm.id);
+    if (updateError) throw new Error("DATABASE_ERROR");
+    if (processed.alerts.length) await admin.from("hallazgos").insert(processed.alerts.map((description) => ({ documento_id: document.id, tipo: "automatización", descripcion: description, prioridad: "media" })));
+    return NextResponse.json({ ...processed, documentId: document.id, expedienteId: expediente.id, integrationMode: "n8n", persisted: true }, { headers: { "Cache-Control": "no-store" } });
+  } catch (error) {
+    await admin.from("documentos").update({ estatus: "error" }).eq("id", document.id).eq("firm_id", context.firm.id);
+    return response(error instanceof Error && error.name === "AbortError" ? 504 : 502, "PROCESSING_ERROR", "El documento se guardó, pero el procesamiento no pudo completarse.");
+  } finally { clearTimeout(timeout); }
 }
