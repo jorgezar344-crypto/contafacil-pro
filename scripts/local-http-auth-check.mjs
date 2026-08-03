@@ -1,0 +1,77 @@
+import { randomUUID } from "node:crypto";
+import { createServerClient } from "@supabase/ssr";
+
+const url = process.env.SUPABASE_URL;
+const anon = process.env.SUPABASE_ANON_KEY;
+const service = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const app = process.env.BRO24_APP_URL || "http://127.0.0.1:3100";
+if (!url || !anon || !service) throw new Error("Missing local Supabase test environment.");
+
+const ids = Object.fromEntries(["firmA", "firmB", "companyA", "companyB", "companyOther", "periodA", "periodB", "periodOther", "clientA", "caseA", "clientB", "caseB"].map((key) => [key, randomUUID()]));
+const users = {};
+const createdUserIds = [];
+const suffix = `${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+const password = "Local-BRO24-Test-Only-2026!";
+const headers = { apikey: service, Authorization: `Bearer ${service}`, "Content-Type": "application/json" };
+
+async function request(path, options = {}) {
+  const response = await fetch(`${url}${path}`, { ...options, headers: { ...headers, ...(options.headers || {}) } });
+  const text = await response.text();
+  if (!response.ok) throw new Error(`${options.method || "GET"} ${path}: ${response.status} ${text}`);
+  return text ? JSON.parse(text) : null;
+}
+async function insert(table, values) {
+  return request(`/rest/v1/${table}`, { method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify(values) });
+}
+async function createUser(label, role, firmId) {
+  const data = await request("/auth/v1/admin/users", { method: "POST", body: JSON.stringify({ email: `${label}.${suffix}@example.test`, password, email_confirm: true }) });
+  createdUserIds.push(data.id);
+  users[label] = { id: data.id, email: `${label}.${suffix}@example.test`, role, firmId };
+  await insert("firm_members", { firm_id: firmId, user_id: data.id, role, status: "active" });
+}
+async function session(email) {
+  const cookies = [];
+  const client = createServerClient(url, anon, { cookies: { getAll: () => [], setAll: (items) => cookies.push(...items) } });
+  const { error } = await client.auth.signInWithPassword({ email, password });
+  if (error) throw error;
+  return cookies.map(({ name, value }) => `${name}=${value}`).join("; ");
+}
+async function appGet(path, cookie = "") {
+  const response = await fetch(`${app}${path}`, { headers: cookie ? { Cookie: cookie } : {} });
+  return { status: response.status, body: await response.json() };
+}
+function check(condition, message) { if (!condition) throw new Error(`Assertion failed: ${message}`); }
+async function cleanup() {
+  for (const table of ["documentos", "expedientes", "clientes", "accounting_periods", "company_members", "client_companies", "firm_members", "accounting_firms"]) {
+    try { await request(`/rest/v1/${table}?id=in.(${Object.values(ids).join(",")})`, { method: "DELETE" }); } catch {}
+    try { await request(`/rest/v1/${table}?firm_id=in.(${ids.firmA},${ids.firmB})`, { method: "DELETE" }); } catch {}
+  }
+  for (const id of createdUserIds) { try { await request(`/auth/v1/admin/users/${id}`, { method: "DELETE" }); } catch {} }
+}
+
+try {
+  await insert("accounting_firms", [{ id: ids.firmA, name: "HTTP Test Firm A", slug: `http-test-a-${suffix}` }, { id: ids.firmB, name: "HTTP Test Firm B", slug: `http-test-b-${suffix}` }]);
+  await createUser("firm_admin", "firm_admin", ids.firmA);
+  await createUser("accountant", "accountant", ids.firmA);
+  await createUser("assistant", "assistant", ids.firmA);
+  await createUser("client_user", "client_user", ids.firmA);
+  await createUser("other_firm", "firm_admin", ids.firmB);
+  await insert("client_companies", [{ id: ids.companyA, firm_id: ids.firmA, legal_name: "HTTP Company A", rfc: "HTA010101AAA" }, { id: ids.companyB, firm_id: ids.firmA, legal_name: "HTTP Company B", rfc: "HTB010101AAA" }, { id: ids.companyOther, firm_id: ids.firmB, legal_name: "HTTP Company Other", rfc: "HTO010101AAA" }]);
+  await insert("company_members", { company_id: ids.companyA, user_id: users.client_user.id, access_level: "viewer" });
+  await insert("accounting_periods", [{ id: ids.periodA, firm_id: ids.firmA, company_id: ids.companyA, year: 2026, month: 7 }, { id: ids.periodB, firm_id: ids.firmA, company_id: ids.companyB, year: 2026, month: 7 }, { id: ids.periodOther, firm_id: ids.firmB, company_id: ids.companyOther, year: 2026, month: 7 }]);
+  await insert("clientes", [{ id: ids.clientA, nombre: "HTTP A", rfc: "HCA010101AAA", razon_social: "HTTP A SA" }, { id: ids.clientB, nombre: "HTTP B", rfc: "HCB010101AAA", razon_social: "HTTP B SA" }]);
+  await insert("expedientes", [{ id: ids.caseA, cliente_id: ids.clientA, periodo_fiscal: "2026-07", firm_id: ids.firmA, company_id: ids.companyA, period_id: ids.periodA }, { id: ids.caseB, cliente_id: ids.clientB, periodo_fiscal: "2026-07", firm_id: ids.firmB, company_id: ids.companyOther, period_id: ids.periodOther }]);
+  await insert("documentos", Array.from({ length: 25 }, (_, index) => ({ expediente_id: ids.caseA, tipo_documento: "factura", nombre_archivo: `http-${index + 1}.xml`, estatus: "recibido", firm_id: ids.firmA, company_id: ids.companyA, period_id: ids.periodA, storage_path: `private/${index + 1}.xml`, sha256: `http-test-${suffix}-${index}` })).concat([{ expediente_id: ids.caseB, tipo_documento: "factura", nombre_archivo: "other.xml", estatus: "recibido", firm_id: ids.firmB, company_id: ids.companyOther, period_id: ids.periodOther, storage_path: "private/other.xml", sha256: `http-test-other-${suffix}` }]));
+
+  const cookies = {}; for (const [name, user] of Object.entries(users)) cookies[name] = await session(user.email);
+  const unauth = await appGet("/api/workspace"); check(unauth.status === 401, "workspace returns 401 without a session");
+  for (const [name, user] of Object.entries(users)) { const result = await appGet("/api/workspace", cookies[name]); check(result.status === 200 && result.body.workspace.role === user.role, `${name} has a valid workspace`); }
+  const valid = await appGet(`/api/app-data?company_id=${ids.companyA}&period_id=${ids.periodA}&page=1&page_size=20`, cookies.firm_admin); check(valid.status === 200 && valid.body.documents.length === 20 && valid.body.pagination.total === 25, "authorized first page is limited to 20");
+  const second = await appGet(`/api/app-data?company_id=${ids.companyA}&period_id=${ids.periodA}&page=2&page_size=20`, cookies.firm_admin); check(second.status === 200 && second.body.documents.length === 5, "authorized second page contains remaining records");
+  check(!Object.keys(valid.body.documents[0]).some((key) => ["firm_id", "company_id", "period_id", "storage_path", "sha256", "uploaded_by", "url_archivo"].includes(key)), "response omits sensitive document columns");
+  const companyDenied = await appGet(`/api/app-data?company_id=${ids.companyB}&period_id=${ids.periodB}`, cookies.client_user); check(companyDenied.status === 403, "client user cannot select an unauthorized company");
+  const periodDenied = await appGet(`/api/app-data?company_id=${ids.companyA}&period_id=${ids.periodB}`, cookies.client_user); check(periodDenied.status === 403, "client user cannot select a period outside its company");
+  const crossFirm = await appGet(`/api/app-data?company_id=${ids.companyA}&period_id=${ids.periodA}`, cookies.other_firm); check(crossFirm.status === 403, "other firm cannot access first firm data");
+  const preserved = await appGet(`/api/workspace?company_id=${ids.companyA}&period_id=${ids.periodA}`, cookies.accountant); check(preserved.status === 200 && preserved.body.workspace.company.id === ids.companyA && preserved.body.workspace.period.id === ids.periodA, "workspace accepts and returns the selected URL context");
+  console.log(JSON.stringify({ status: "passed", assertions: 12, fixture_users: 5, fixture_documents: 26 }));
+} finally { await cleanup(); }

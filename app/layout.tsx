@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import "./globals.css";
+import { WorkspaceProvider } from "@/components/bro24/workspace-context";
 
 export const metadata: Metadata = {
   title: "BRO24 Contable",
@@ -7,5 +9,5 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="es"><body>{children}</body></html>;
+  return <html lang="es"><body><Suspense fallback={children}><WorkspaceProvider>{children}</WorkspaceProvider></Suspense></body></html>;
 }
