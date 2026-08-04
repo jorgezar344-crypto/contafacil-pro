@@ -45,6 +45,18 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         }
         setWorkspace(data.workspace);
         setError("");
+
+        // The API resolves a safe default when a valid workspace is opened
+        // without a selection. Persist that server-authorized selection in
+        // the URL so every subsequent internal link carries the same context.
+        const resolvedCompanyId = data.workspace?.company?.id;
+        const resolvedPeriodId = data.workspace?.period?.id;
+        if (resolvedCompanyId && (!query.get("company_id") || (resolvedPeriodId && !query.get("period_id")))) {
+          const next = new URLSearchParams(query.toString());
+          next.set("company_id", resolvedCompanyId);
+          if (resolvedPeriodId) next.set("period_id", resolvedPeriodId);
+          router.replace(`${pathname}?${next.toString()}`, { scroll: false });
+        }
       } catch {
         if (active) {
           setWorkspace(undefined);
@@ -54,7 +66,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     }
     void load();
     return () => { active = false; };
-  }, [query]);
+  }, [pathname, query, router]);
 
   const value = useMemo<WorkspaceValue>(() => {
     const href = (target: string, overrides: Record<string, string | null | undefined> = {}) => {
