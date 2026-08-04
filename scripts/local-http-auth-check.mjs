@@ -11,7 +11,8 @@ if (!url || !anon || !service) throw new Error("Missing local Supabase test envi
 const ids = Object.fromEntries(["firmA", "firmB", "companyA", "companyB", "companyOther", "periodA", "periodB", "periodOther", "clientA", "caseA", "clientB", "caseB"].map((key) => [key, randomUUID()]));
 const users = {};
 const createdUserIds = [];
-const suffix = `${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+const suffix = process.env.BRO24_VISUAL_FIXTURE ? "visual-fixture" : `${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+const fixtureRfc = (prefix) => `${prefix}${`${suffix.replace(/\D/g, "")}000000`.slice(-6)}AAA`;
 const password = "Local-BRO24-Test-Only-2026!";
 const headers = { apikey: service, Authorization: `Bearer ${service}`, "Content-Type": "application/json" };
 const storage = createClient(url, service, { auth: { autoRefreshToken: false, persistSession: false } });
@@ -43,6 +44,10 @@ async function appGet(path, cookie = "") {
   const response = await fetch(`${app}${path}`, { headers: cookie ? { Cookie: cookie } : {} });
   return { status: response.status, body: await response.json() };
 }
+async function appPost(path, cookie, body = {}) {
+  const response = await fetch(`${app}${path}`, { method: "POST", headers: { Cookie: cookie, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  return { status: response.status, body: await response.json() };
+}
 function check(condition, message) { if (!condition) throw new Error(`Assertion failed: ${message}`); }
 async function cleanup() {
   if (uploadedPaths.length) await storage.storage.from("documentos-fiscales-demo").remove(uploadedPaths);
@@ -60,12 +65,12 @@ try {
   await createUser("assistant", "assistant", ids.firmA);
   await createUser("client_user", "client_user", ids.firmA);
   await createUser("other_firm", "firm_admin", ids.firmB);
-  await insert("client_companies", [{ id: ids.companyA, firm_id: ids.firmA, legal_name: "HTTP Company A", rfc: "HTA010101AAA" }, { id: ids.companyB, firm_id: ids.firmA, legal_name: "HTTP Company B", rfc: "HTB010101AAA" }, { id: ids.companyOther, firm_id: ids.firmB, legal_name: "HTTP Company Other", rfc: "HTO010101AAA" }]);
+  await insert("client_companies", [{ id: ids.companyA, firm_id: ids.firmA, legal_name: "HTTP Company A", rfc: fixtureRfc("HTA") }, { id: ids.companyB, firm_id: ids.firmA, legal_name: "HTTP Company B", rfc: fixtureRfc("HTB") }, { id: ids.companyOther, firm_id: ids.firmB, legal_name: "HTTP Company Other", rfc: fixtureRfc("HTO") }]);
   await insert("company_members", { company_id: ids.companyA, user_id: users.client_user.id, access_level: "viewer" });
   await insert("accounting_periods", [{ id: ids.periodA, firm_id: ids.firmA, company_id: ids.companyA, year: 2026, month: 7 }, { id: ids.periodB, firm_id: ids.firmA, company_id: ids.companyB, year: 2026, month: 7 }, { id: ids.periodOther, firm_id: ids.firmB, company_id: ids.companyOther, year: 2026, month: 7 }]);
-  await insert("clientes", [{ id: ids.clientA, nombre: "HTTP A", rfc: "HCA010101AAA", razon_social: "HTTP A SA" }, { id: ids.clientB, nombre: "HTTP B", rfc: "HCB010101AAA", razon_social: "HTTP B SA" }]);
+  await insert("clientes", [{ id: ids.clientA, nombre: "HTTP A", rfc: fixtureRfc("HCA"), razon_social: "HTTP A SA" }, { id: ids.clientB, nombre: "HTTP B", rfc: fixtureRfc("HCB"), razon_social: "HTTP B SA" }]);
   await insert("expedientes", [{ id: ids.caseA, cliente_id: ids.clientA, periodo_fiscal: "2026-07", firm_id: ids.firmA, company_id: ids.companyA, period_id: ids.periodA }, { id: ids.caseB, cliente_id: ids.clientB, periodo_fiscal: "2026-07", firm_id: ids.firmB, company_id: ids.companyOther, period_id: ids.periodOther }]);
-  await insert("documentos", Array.from({ length: 25 }, (_, index) => ({ expediente_id: ids.caseA, tipo_documento: "factura", nombre_archivo: `http-${index + 1}.xml`, estatus: "recibido", firm_id: ids.firmA, company_id: ids.companyA, period_id: ids.periodA, storage_path: `private/${index + 1}.xml`, sha256: `http-test-${suffix}-${index}` })).concat([{ expediente_id: ids.caseB, tipo_documento: "factura", nombre_archivo: "other.xml", estatus: "recibido", firm_id: ids.firmB, company_id: ids.companyOther, period_id: ids.periodOther, storage_path: "private/other.xml", sha256: `http-test-other-${suffix}` }]));
+  await insert("documentos", Array.from({ length: 25 }, (_, index) => ({ expediente_id: ids.caseA, tipo_documento: "factura", nombre_archivo: `http-${index + 1}.xml`, estatus: "needs_review", firm_id: ids.firmA, company_id: ids.companyA, period_id: ids.periodA, storage_path: `private/${index + 1}.xml`, sha256: `http-test-${suffix}-${index}` })).concat([{ expediente_id: ids.caseB, tipo_documento: "factura", nombre_archivo: "other.xml", estatus: "needs_review", firm_id: ids.firmB, company_id: ids.companyOther, period_id: ids.periodOther, storage_path: "private/other.xml", sha256: `http-test-other-${suffix}` }]));
 
   const cookies = {}; for (const [name, user] of Object.entries(users)) cookies[name] = await session(user.email);
   const unauth = await appGet("/api/workspace"); check(unauth.status === 401, "workspace returns 401 without a session");
@@ -83,5 +88,14 @@ try {
   const uploadDeniedResponse = await fetch(`${app}/api/process-document`, { method: "POST", headers: { Cookie: cookies.client_user }, body: uploadDenied }); check(uploadDeniedResponse.status === 403, "upload blocks an unauthorized company");
   const detail = await appGet(`/api/documents/${uploadBody.documentId}?company_id=${ids.companyA}&period_id=${ids.periodA}`, cookies.firm_admin); check(detail.status === 200 && detail.body.document.id === uploadBody.documentId && !Object.hasOwn(detail.body.document, "storage_path"), "authorized detail hides private storage path");
   const uploadedRow = await request(`/rest/v1/documentos?id=eq.${uploadBody.documentId}&select=storage_path`); if (uploadedRow[0]?.storage_path) uploadedPaths.push(uploadedRow[0].storage_path);
-  console.log(JSON.stringify({ status: "passed", assertions: 15, fixture_users: 5, fixture_documents: 27 }));
-} finally { await cleanup(); }
+  const actionDocuments = await request(`/rest/v1/documentos?company_id=eq.${ids.companyA}&period_id=eq.${ids.periodA}&nombre_archivo=like.http-*&select=id&order=created_at.asc&limit=3`);
+  const actionQuery = `?company_id=${ids.companyA}&period_id=${ids.periodA}`;
+  const review = await appPost(`/api/documents/${actionDocuments[0].id}/review${actionQuery}`, cookies.assistant); check(review.status === 200 && review.body.status === "reviewed", "assistant can review an authorized document");
+  const approve = await appPost(`/api/documents/${actionDocuments[0].id}/approve${actionQuery}`, cookies.accountant); check(approve.status === 200 && approve.body.status === "approved", "accountant can approve a reviewed document");
+  const invalidTransition = await appPost(`/api/documents/${actionDocuments[0].id}/approve${actionQuery}`, cookies.accountant); check(invalidTransition.status === 409, "invalid status transition is blocked");
+  const deniedReview = await appPost(`/api/documents/${actionDocuments[1].id}/review${actionQuery}`, cookies.client_user); check(deniedReview.status === 403, "client user cannot review documents");
+  const rejectedWithoutReason = await appPost(`/api/documents/${actionDocuments[1].id}/reject${actionQuery}`, cookies.firm_admin); check(rejectedWithoutReason.status === 422, "rejection without reason is blocked");
+  const rejected = await appPost(`/api/documents/${actionDocuments[1].id}/reject${actionQuery}`, cookies.firm_admin, { reason: "Documento incorrecto" }); check(rejected.status === 200 && rejected.body.status === "rejected", "firm admin can reject with reason");
+  const actionDetail = await appGet(`/api/documents/${actionDocuments[0].id}${actionQuery}`, cookies.firm_admin); check(actionDetail.status === 200 && actionDetail.body.document.activity.length >= 2, "action audit events are visible to authorized users");
+  console.log(JSON.stringify({ status: "passed", assertions: 22, fixture_users: 5, fixture_documents: 27 }));
+} finally { if (!process.env.BRO24_KEEP_FIXTURES) await cleanup(); }
