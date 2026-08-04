@@ -12,8 +12,9 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   if (error) return NextResponse.json({ success: false, code: "QUERY_ERROR" }, { status: 500, headers: { "Cache-Control": "no-store" } });
   if (!document) return NextResponse.json({ success: false, code: "NOT_FOUND" }, { status: 404, headers: { "Cache-Control": "no-store" } });
   const { data: findings } = await client.from("hallazgos").select("tipo,descripcion,prioridad,created_at").eq("documento_id", id).order("created_at", { ascending: false });
+  const { data: activity } = await client.from("audit_events").select("action,comment,before_data,after_data,created_at").eq("entity_type", "document").eq("entity_id", id).order("created_at", { ascending: false });
   let signed_url: string | null = null;
   if (document.storage_path) { try { const admin = getSupabaseAdmin(); const { data } = await admin.storage.from(STORAGE_BUCKET).createSignedUrl(document.storage_path, 300); signed_url = data?.signedUrl || null; } catch {} }
   const { storage_path: _hidden, ...safe } = document;
-  return NextResponse.json({ success: true, document: { ...safe, signed_url, findings: findings || [] } }, { headers: { "Cache-Control": "private, no-store" } });
+  return NextResponse.json({ success: true, document: { ...safe, signed_url, findings: findings || [], activity: activity || [] } }, { headers: { "Cache-Control": "private, no-store" } });
 }

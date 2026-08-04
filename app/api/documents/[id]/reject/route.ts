@@ -1,0 +1,2 @@
+import { actionError, transition } from "@/lib/document-actions";
+export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) { const { id } = await params; const body = await request.json().catch(() => ({})); const reason = typeof body.reason === "string" ? body.reason.trim().slice(0, 1000) : ""; if (!reason) return actionError(422, "VALIDATION_ERROR", "Indica el motivo del rechazo."); return transition(request, id, "reject", "rejected", reason); }
